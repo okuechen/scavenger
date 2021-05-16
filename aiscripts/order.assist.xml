@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<diff>
+	<add sel="//do_if[@value='not $order.requiredskill or (this.combinedskill ge $order.requiredskill)']">
+		<do_if value="$order.id == 'Scavenger'">
+			<set_value name="$added"/>
+			<run_script name="$scriptname">
+				<param name="illegalwares" value="$order.$illegalwares"/>
+				<param name="maxinventory" value="$order.$maxinventory"/>
+				<param name="sector" value="$order.$sector"/>
+			</run_script>
+		</do_if>
+	</add>
+</diff>

@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="utf-8"?>
+<aiscript name="order.scavenger" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">
+	<order id="Scavenger" name="Scavenger" description="Search and collect drops to trade or bring them to HQ." category="trade" infinite="true" allowinloop="false">
+		<params>
+			<param name="illegalwares" type="bool" default="false" text="{88327,110}" comment="Collect illegal wares."/>
+			<param name="maxinventory" type="number" default="250" text="{88327,111}" comment="Max inventory items until drop at hq.">
+				<input_param name="startvalue" value="250"/>
+				<input_param name="min" value="1"/>
+				<input_param name="max" value="9999"/>
+				<input_param name="step" value="1"/>
+			</param>
+			<param name="sector" default="this.sector" type="object" text="{88327,112}" comment="Target sector.">
+				<input_param name="class" value="[class.sector]"/>
+			</param>
+			<param name="debugchance" type="bool" default="0" advanced="true" text="{1041, 10086}" comment="Print debug output">
+				<input_param name="truevalue" value="100"/>
+			</param>
+		</params>
+		<skill min="20"/>
+		<requires>
+			<match shiptype="shiptype.lasertower" negate="true"/>
+		</requires>
+	</order>
+
+	<interrupts>
+		<handler ref="SectorChangeHandler"/>
+		<handler ref="AttackHandler"/>
+		<handler ref="MissileLockHandler"/>
+		<handler ref="ScannedHandler"/>
+		<handler ref="InspectedHandler"/>
+		<handler ref="FoundAbandonedHandler"/>
+		<handler ref="FoundLockboxHandler"/>
+		<handler ref="ResupplyHandler"/>
+		<handler ref="TargetInvalidHandler"/>
+	</interrupts>
+
+	<init>
+		<set_order_syncpoint_reached order="this.ship.order"/>
+	</init>
+	
+	<attention min="unknown">
+		<actions>
+			<label name="start"/>
+			
+			<do_if value="this.sector != $sector">
+			  <run_script name="'move.generic'">
+				<param name="destination" value="$sector"/>
+			  </run_script>
+			</do_if>
+
+			<set_value name="$illegalwareslist" exact="[]" />
+
+			<do_if value="not $illegalwares">
+				<set_value name="$illegalwareslist" exact="[ware.spacefuel,ware.spaceweed,ware.majadust]"/>
+				<do_if value="@ware.computronicsubstrate.id">
+					<append_list_elements name="$illegalwareslist" other="[ware.stimulants]"/>
+				</do_if>
+			</do_if>
+
+			<find_object groupname="$targetgroup" class="class.drop" space="$sector" multiple="true">
+				<match excluded="$illegalwareslist" />
+			</find_object>
+
+			<remove_value name="$illegalwareslist" />
+
+			<do_if value="@$targetgroup.count">
+				<do_if value="this.assignedcontrolled.isclass.[class.ship_l, class.ship_xl]">
+					<run_script name="'move.collect.ship.capship'">
+						<param name="targets" value="$targetgroup"/>
+						<param name="debugchance" value="$debugchance"/>
+					</run_script>
+			  	</do_if>
+			 	<do_else>
+					<run_script name="'move.collect.ship.smallship'">
+				  		<param name="targets" value="$targetgroup"/>
+				  		<param name="debugchance" value="$debugchance"/>
+					</run_script>
+			  	</do_else>
+			</do_if>
+			
+			<label name="sell"/>
+
+			<set_value name="$freecapacity" exact="(this.assignedcontrolled.cargo.free.all)f"/>
+      		<set_value name="$totalcapacity" exact="(this.assignedcontrolled.cargo.capacity.all)f"/>
+
+			<do_if value="($freecapacity / $totalcapacity) * 100" max="10">
+				<find_cluster_in_range distances="$clusters" multiple="true" object="$sector" mindistance="0" maxdistance="5"/>
+				<set_value name="$sellspaces" exact="$clusters.keys.sorted"/>
+				<set_value name="$buyoffers" exact="[]"/>
+				<set_value name="$wareamounts" exact="table[]"/>
+				
+				<do_all exact="this.assignedcontrolled.cargo.count" counter="$ware_counter">
+					<set_value name="$ware" exact="this.assignedcontrolled.cargo.{$ware_counter}" />
+					<set_value name="$wareamounts.{$ware}" exact="this.assignedcontrolled.cargo.{$ware}.count" />
+
+					<do_all exact="$sellspaces.count" counter="$sector_counter">	
+						<find_buy_offer tradepartner="this.assignedcontrolled" space="$sellspaces.{$sector_counter}" result="$buyers" wares="this.assignedcontrolled.cargo.{$ware_counter}" multiple="true">
+							<match_buyer>
+								<match_relation_to object="this.assignedcontrolled" relation="dock" comparison="ge"/>
+								<match tradesknownto="this.owner"/>
+								<match_use_blacklist group="blacklistgroup.civilian" type="blacklisttype.objectactivity" object="this.ship"/>
+							</match_buyer>
+						</find_buy_offer>
+						
+						<do_all exact="$buyers.count" counter="$buy">
+							<append_to_list name="$buyoffers" exact="$buyers.{$buy}"/>
+						</do_all>
+					</do_all>
+				</do_all>
+
+				<wait min="1ms" max="5ms"/>
+
+				<do_if value="$buyoffers.count gt 0">
+					<shuffle_list list="$buyoffers"/>
+					<sort_trades name="$buyoffers" tradelist="$buyoffers" sorter="relativeprice"/>
+
+					<do_all exact="$buyoffers.count" counter="$buy_counter" reverse="true">
+						<set_value name="$buyoffer" exact="$buyoffers.{$buy_counter}"/>
+						
+						<do_if value="$buyoffer.available and $buyoffer.amount">
+							<set_value name="$resource_ware" exact="$buyoffer.ware"/>
+							<set_value name="$cargo_for_ware" exact="$wareamounts.{$resource_ware}"/>
+
+							<do_if value="$cargo_for_ware gt 0">
+								<set_value name="$amounttosell" exact="$buyoffer.amount"/>
+								<do_if value="$amounttosell gt $cargo_for_ware">
+									<set_value name="$amounttosell" exact="$cargo_for_ware"/>
+								</do_if>
+								
+								<clamp_trade_amount trade="$buyoffer" seller="this.assignedcontrolled" amount="$amounttosell" buyer="$buyoffer.buyer" result="$amount"/>
+								
+								<do_if value="$amount">
+									<create_trade_order object="this.object" tradeoffer="$buyoffer" amount="$amount" immediate="true"/>
+									<set_value name="$wareamounts.{$resource_ware}" exact="$wareamounts.{$resource_ware} - $amount"/>
+								</do_if>
+
+								<remove_value name="$amounttosell" />
+								<remove_value name="$resource_ware" />
+								<remove_value name="$cargo_for_ware" />
+							</do_if>
+						</do_if>
+					</do_all>
+
+					<remove_value name="$buyoffer" />
+				</do_if>
+
+				<remove_value name="$buyoffers"/>
+				<remove_value name="$wareamounts"/>
+
+				<wait min="1ms" max="5ms"/>
+			</do_if>
+
+			<label name="deposit_inventory"/>
+
+			<do_if value="this.inventory.count and this.trueowner.headquarters">
+				<set_value name="$inventory_count" exact="0" />
+
+				<do_for_each name="$locware" valuename="$locamount" in="this.inventory.table">
+				  	<do_if value="this.inventory.{$locware}.exists">
+						<set_value name="$inventory_count" exact="$inventory_count + $locamount" />
+				  	</do_if>
+				</do_for_each>
+
+				<do_if value="$inventory_count ge $maxinventory">
+					<set_value name="$destination" exact="this.trueowner.headquarters" />
+
+					<do_if value="not @this.assignedcontrolled.hascontext.{$destination}">						
+						<run_script name="'order.dock'">
+							<param name="destination" value="$destination"/>
+							<param name="trading" value="true"/>
+							<param name="callerid" value="this.assignedcontrolled.order"/>
+						</run_script>
+					</do_if>
+
+					<wait min="1ms" max="5ms"/>
+
+					<set_value name="$depositentity" exact="$destination.assignedcontrolentity.default"/>
+					
+					<do_if value="$depositentity.exists">
+						<do_all exact="this.inventory.count" counter="$i" reverse="true">
+							<set_value name="$locware" exact="this.inventory.{$i}"/>
+							<do_if value="$locware and this.inventory.{$locware}.exists and this.inventory.{$locware}.count">
+								<set_value name="$locamount" exact="this.inventory.{$locware}.count"/>
+								<add_inventory ware="$locware" exact="$locamount" entity="$depositentity"/>
+								<remove_inventory ware="$locware" exact="$locamount" entity="this"/>
+								<remove_value name="$locamount"/>
+							</do_if>
+							<remove_value name="$locware"/>
+						</do_all>
+					</do_if>
+				
+					<remove_value name="$depositentity"/>
+					<remove_value name="$destination"/>
+
+					<run_script name="'move.undock'">
+						<param name="skipwait" value="true"/>
+					</run_script>
+
+					<wait min="1ms" max="5ms"/>
+
+					<resume label="start"/>
+				</do_if>
+
+				<remove_value name="$inventory_count"/>
+			</do_if>
+
+			<label name="finish"/>
+
+			<wait min="15s" max="20s"/>
+			<resume label="start"/>
+		</actions>
+	</attention>
+</aiscript>
